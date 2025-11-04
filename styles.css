@@ -32,18 +32,17 @@ body, html { height: 100%; width: 100%; }
   padding: 5px;
 }
 
-#editorArea { flex: 1; display: flex; flex-direction: column; padding: 10px; }
+#editorArea { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: 10px; background: #ecf0f1; }
 
-#toolbar { margin-bottom: 5px; }
-
-#editorPreview {
-  flex: 1;
+#previewFrame {
+  width: 100%;
+  height: 100%;
   border: 1px solid #ccc;
-  padding: 10px;
-  overflow-y: auto;
-  background: #fdfdfd;
 }
 
-/* Section visual styling */
-.section { border: 1px dashed #888; padding: 10px; margin: 5px 0; background: #fff; cursor: move; }
-.section img { max-width: 100%; height: auto; }
+/* Highlight editable sections in iframe */
+.section-overlay {
+  outline: 2px dashed #3498db;
+  position: absolute;
+  z-index: 9999;
+}
