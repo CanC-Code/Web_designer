@@ -1,0 +1,49 @@
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+
+body, html { height: 100%; width: 100%; }
+
+#container { display: flex; height: 100vh; }
+
+#sidebar {
+  width: 250px;
+  background: #2c3e50;
+  color: white;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+#sidebar h2 { margin-bottom: 10px; }
+
+#sidebar ul { list-style: none; padding-left: 0; margin-bottom: 10px; }
+
+#sidebar ul li {
+  padding: 5px;
+  margin-bottom: 3px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+#sidebar ul li:hover { background: #34495e; }
+
+#sidebar button, #sidebar input, #sidebar select {
+  display: block;
+  margin: 5px 0;
+  width: 100%;
+  padding: 5px;
+}
+
+#editorArea { flex: 1; display: flex; flex-direction: column; padding: 10px; }
+
+#toolbar { margin-bottom: 5px; }
+
+#editorPreview {
+  flex: 1;
+  border: 1px solid #ccc;
+  padding: 10px;
+  overflow-y: auto;
+  background: #fdfdfd;
+}
+
+/* Section visual styling */
+.section { border: 1px dashed #888; padding: 10px; margin: 5px 0; background: #fff; cursor: move; }
+.section img { max-width: 100%; height: auto; }
