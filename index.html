@@ -1,577 +1,184 @@
-// editor.js
-// Main Web Designer logic (local + GitHub loader, iframe live-edit, export zip)
-
-(() => {
-  // --- DOM refs
-  const localFolder = document.getElementById('localFolder');
-  const loadGithubBtn = document.getElementById('loadGithub');
-  const ghOwner = document.getElementById('ghOwner');
-  const ghRepo = document.getElementById('ghRepo');
-  const ghPath = document.getElementById('ghPath');
-  const ghBranch = document.getElementById('ghBranch');
-  const ghStatus = document.getElementById('ghStatus');
-
-  const createPageBtn = document.getElementById('createPage');
-  const addSectionBtn = document.getElementById('addSection');
-  const exportZipBtn = document.getElementById('exportZip');
-
-  const pageListEl = document.getElementById('pageList');
-  const previewFrame = document.getElementById('preview');
-
-  const viewportSelect = document.getElementById('viewport');
-
-  // Style editor
-  const selectedLabel = document.getElementById('selectedLabel');
-  const styleBg = document.getElementById('styleBg');
-  const styleColor = document.getElementById('styleColor');
-  const styleFontSize = document.getElementById('styleFontSize');
-  const stylePadding = document.getElementById('stylePadding');
-  const styleMargin = document.getElementById('styleMargin');
-  const applyStylesBtn = document.getElementById('applyStyles');
-  const clearStylesBtn = document.getElementById('clearStyles');
-
-  // --- State
-  // files: map path -> { content: string | Blob | File, blobUrl?, type }
-  // For local uploads keys = file.webkitRelativePath, for GitHub keys = path relative to repo root
-  let files = {}; // { "index.html": {content: "...", blobUrl: "...", isText:true}, "css/style.css": {...} }
-  let htmlFiles = []; // ordered list of html file paths
-  let currentFile = null;
-  let selectedElementId = null;
-
-  // Helper to add file (text or blob)
-  function addFile(key, value, isText = true) {
-    files[key] = files[key] || {};
-    files[key].content = value;
-    files[key].isText = !!isText;
-  }
-
-  // Create blob URL for a file (if not already)
-  function ensureBlobUrl(key) {
-    const f = files[key];
-    if (!f) return null;
-    if (f.blobUrl) return f.blobUrl;
-    if (f.isText) {
-      // create blob from text (used for CSS/JS/images fetched as base64 sometimes)
-      const blob = new Blob([f.content], { type: detectMimeType(key) });
-      f.blobUrl = URL.createObjectURL(blob);
-      return f.blobUrl;
-    } else {
-      // content is a Blob/File already
-      f.blobUrl = URL.createObjectURL(f.content);
-      return f.blobUrl;
-    }
-  }
-
-  function detectMimeType(path) {
-    const ext = path.split('.').pop().toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image/' + (ext === 'jpg' ? 'jpeg' : ext);
-    if (ext === 'css') return 'text/css';
-    if (ext === 'js') return 'application/javascript';
-    if (ext === 'html' || ext === 'htm') return 'text/html';
-    return 'application/octet-stream';
-  }
-
-  // --- LOCAL FOLDER LOADER
-  localFolder.addEventListener('change', async (ev) => {
-    const fileList = Array.from(ev.target.files || []);
-    if (!fileList.length) return;
-    files = {};
-    htmlFiles = [];
-    currentFile = null;
-    // store files keyed by relative path
-    for (const file of fileList) {
-      const key = file.webkitRelativePath || file.name;
-      const isText = /\.(html|htm|css|js|txt|svg)$/i.test(key);
-      if (isText) {
-        // read as text
-        const text = await file.text();
-        addFile(key, text, true);
-      } else {
-        addFile(key, file, false);
-      }
-    }
-    prepareHtmlList();
-    ghStatus.textContent = `Loaded ${Object.keys(files).length} files from local folder.`;
-  });
-
-  // --- GITHUB REPO LOADER (public repos) ---
-  loadGithubBtn.addEventListener('click', async () => {
-    const owner = (ghOwner.value || '').trim();
-    const repo = (ghRepo.value || '').trim();
-    const path = (ghPath.value || '').trim();
-    const branch = (ghBranch.value || ''); // if empty, we'll get default branch
-    if (!owner || !repo) {
-      ghStatus.textContent = 'Enter owner and repo.';
-      return;
-    }
-    ghStatus.textContent = 'Fetching repo tree... (may take a moment)';
-    try {
-      files = {};
-      htmlFiles = [];
-      currentFile = null;
-      // Get default branch if not provided
-      let branchName = branch;
-      if (!branchName) {
-        const repoInfo = await fetchJson(`https://api.github.com/repos/${owner}/${repo}`);
-        branchName = repoInfo.default_branch;
-      }
-      // Get recursive tree
-      // Use git/trees API: /repos/{owner}/{repo}/git/trees/{branch}?recursive=1
-      const treeResp = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branchName)}?recursive=1`);
-      const tree = treeResp.tree || [];
-      ghStatus.textContent = `Found ${tree.length} items ? fetching files...`;
-      // Filter to files under path (if provided)
-      const normalizedPath = path ? (path.replace(/^\/*/, '').replace(/\/*$/, '') + '/') : '';
-      const filesToFetch = tree.filter(item => item.type === 'blob' && item.path.startsWith(normalizedPath));
-      // Fetch each file's raw content using the blob sha via /repos/{owner}/{repo}/git/blobs/{sha} (returns base64)
-      for (const entry of filesToFetch) {
-        const filePath = entry.path; // relative to repo root
-        const blobJson = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/git/blobs/${entry.sha}`);
-        // blobJson.content is base64
-        const contentBase64 = blobJson.content || '';
-        const text = atob(contentBase64.replace(/\n/g, ''));
-        // Decide if treat as text based on extension
-        const isText = /\.(html?|css|js|svg|txt|json|md)$/i.test(filePath);
-        if (isText) {
-          addFile(filePath, text, true);
-        } else {
-          // For binaries (images etc), decode base64 into blob
-          const byteCharacters = atob(contentBase64.replace(/\n/g, ''));
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
-          const byteArray = new Uint8Array(byteNumbers);
-          const blob = new Blob([byteArray], { type: detectMimeType(filePath) });
-          addFile(filePath, blob, false);
-        }
-      }
-      prepareHtmlList();
-      ghStatus.textContent = `Loaded ${Object.keys(files).length} files from GitHub repo ${owner}/${repo}${path ? '/' + path : ''} (branch: ${branchName})`;
-    } catch (err) {
-      console.error(err);
-      ghStatus.textContent = 'Error loading GitHub repo: ' + (err.message || err);
-    }
-  });
-
-  // Helper fetch JSON with basic error handling
-  async function fetchJson(url) {
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText} - ${url}`);
-    return resp.json();
-  }
-
-  // Prepare list of HTML files from files map
-  function prepareHtmlList() {
-    htmlFiles = Object.keys(files).filter(k => /\.(html?|htm)$/i.test(k)).sort();
-    renderPageList();
-  }
-
-  // Render pages sidebar
-  function renderPageList() {
-    pageListEl.innerHTML = '';
-    for (const p of htmlFiles) {
-      const li = document.createElement('li');
-      li.textContent = p;
-      li.dataset.path = p;
-      li.addEventListener('click', () => {
-        document.querySelectorAll('#pageList li').forEach(n=>n.classList.remove('active'));
-        li.classList.add('active');
-        loadPage(p);
-      });
-      pageListEl.appendChild(li);
-    }
-  }
-
-  // --- Load selected page into iframe (resolve asset URLs to blob URLs) ---
-  async function loadPage(path) {
-    if (!files[path]) {
-      alert('Page not found: ' + path);
-      return;
-    }
-    currentFile = path;
-    // Get raw HTML text
-    const htmlText = files[path].content;
-    // The base path is the directory containing the HTML file
-    const basePath = path.split('/').slice(0, -1).join('/') + (path.indexOf('/') === -1 ? '' : '/');
-    // Rewrite references to CSS/JS/img fonts -> blob URLs (create blob URLs from files map)
-    let rewritten = await rewriteAssetURLs(htmlText, basePath);
-    // Inject editor helper script (we'll append a small client script to make elements selectable, draggable & resizable)
-    rewritten = injectEditorClient(rewritten);
-    // Write into iframe
-    const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
-    doc.open();
-    doc.write(rewritten);
-    doc.close();
-    // wait a tick then initialize iframe features
-    setTimeout(() => {
-      initIframeInteractions();
-    }, 200);
-  }
-
-  // Replace src/href references in HTML with blob URLs from files map (resolving relative paths)
-  async function rewriteAssetURLs(htmlText, basePath) {
-    // Build a mapping of reference -> blobUrl for easy replace.
-    // We will search for src="...", src='...', href="...", href='...' occurrences.
-    // For each found url, resolve relative to basePath and if present in files map replace by blob URL.
-
-    // Pre-generate blob urls for all non-text files and for CSS/JS text files
-    for (const key of Object.keys(files)) {
-      ensureBlobUrl(key);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Web Designer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* --- Layout --- */
+    body {
+      display: flex;
+      flex-direction: row;
+      height: 100vh;
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #111;
+      color: #eee;
     }
 
-    // Helper to resolve a URL relative to basePath
-    function resolvePath(url) {
-      if (!url || url.startsWith('data:') || url.startsWith('http:') || url.startsWith('https:') || url.startsWith('//')) {
-        return url; // leave absolute & data & external as-is
-      }
-      // Build a dummy base to let URL resolve relative paths and .. parts
-      const dummyBase = 'https://dummy/' + basePath;
-      try {
-        const resolved = new URL(url, dummyBase).pathname.replace(/^\//,''); // remove leading slash
-        return resolved;
-      } catch (e) {
-        return url;
-      }
+    /* --- Sidebar --- */
+    #sidebar {
+      width: 300px;
+      background: #1e1e1e;
+      border-right: 1px solid #333;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      box-sizing: border-box;
+      overflow-y: auto;
     }
 
-    // Replace function
-    const attrPattern = /(src|href)\s*=\s*(['"])(.*?)\2/gi;
-    let out = htmlText.replace(attrPattern, (m, attr, q, url) => {
-      const resolved = resolvePath(url);
-      if (files[resolved]) {
-        const blobUrl = ensureBlobUrl(resolved);
-        return `${attr}=${q}${blobUrl}${q}`;
-      } else {
-        // not in our files map: attempt to keep as-is (external)
-        return m;
-      }
-    });
-
-    // Also handle CSS url(...) inside style tags or CSS files inlined
-    out = out.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (m, q, url) => {
-      const resolved = resolvePath(url);
-      if (files[resolved]) {
-        const blobUrl = ensureBlobUrl(resolved);
-        return `url(${blobUrl})`;
-      } else return m;
-    });
-
-    return out;
-  }
-
-  // Inject a small client script into the HTML so that:
-  // - Click selects element and posts message to parent with its data-editor-id
-  // - Mark elements with data-editor-id so parent can reference them
-  // - Add basic dragstart/dragend handlers and a resize handle for images/sections
-  function injectEditorClient(htmlText) {
-    // We will append a script right before </body> or at end of doc
-    const clientScript = `
-<script>
-(function(){
-  // assign ids to block elements
-  let idCounter = 1;
-  function markElements() {
-    const selectors = 'p,h1,h2,h3,h4,header,footer,section,div,article,img';
-    document.querySelectorAll(selectors).forEach(el => {
-      if (!el.dataset.editorId) {
-        el.dataset.editorId = 'ed-' + (idCounter++);
-      }
-      // make block elements editable for text (except images)
-      if (el.tagName.toLowerCase() !== 'img') {
-        el.setAttribute('contenteditable', 'true');
-      } else {
-        // images not contenteditable
-      }
-      el.classList.add('editable-block');
-      el.setAttribute('draggable', true);
-      el.addEventListener('dragstart', (e)=>{ e.dataTransfer.setData('text/plain',''); el.classList.add('dragging'); });
-      el.addEventListener('dragend', (e)=>{ el.classList.remove('dragging'); });
-    });
-  }
-
-  document.addEventListener('DOMContentLoaded', markElements);
-  // Run immediately in case content already loaded
-  markElements();
-
-  // Click selection -> post message to parent
-  document.addEventListener('click', function(e){
-    // ignore clicks on iframe-injected controls
-    const el = e.target.closest('[data-editor-id]');
-    if (!el) return;
-    e.stopPropagation(); e.preventDefault();
-    // highlight element
-    document.querySelectorAll('.section-selected').forEach(x=>x.classList.remove('section-selected'));
-    el.classList.add('section-selected');
-    // send message to parent with editor id and bounding rect
-    const rect = el.getBoundingClientRect();
-    parent.postMessage({
-      type: 'element-selected',
-      id: el.dataset.editorId,
-      tag: el.tagName,
-      text: el.innerText,
-      rect: {top:rect.top,left:rect.left,width:rect.width,height:rect.height}
-    }, '*');
-  }, true);
-
-  // Allow dropping/reordering
-  document.body.addEventListener('dragover', e=>e.preventDefault());
-  document.body.addEventListener('drop', e=>{
-    e.preventDefault();
-    const dragging = document.querySelector('.dragging');
-    if (!dragging) return;
-    const y = e.clientY;
-    // find insertion target
-    const children = Array.from(document.body.children).filter(c=>c !== dragging);
-    let insertBefore = null;
-    for (const c of children) {
-      const r = c.getBoundingClientRect();
-      if (y < r.top + r.height/2) { insertBefore = c; break; }
+    #sidebar h2 {
+      margin: 0 0 1rem 0;
+      font-size: 1.4rem;
+      color: #00aaff;
     }
-    document.body.insertBefore(dragging, insertBefore);
-    // notify parent that DOM changed (parent will pull outerHTML if needed)
-    parent.postMessage({type:'dom-changed'}, '*');
-  });
 
-  // Add resize handles to images and block elements (use simple mouse resize)
-  function addResizeHandle(el) {
-    if (el.querySelector('.resize-handle')) return;
-    const handle = document.createElement('div');
-    handle.className = 'resize-handle';
-    handle.style.position = 'absolute';
-    handle.style.right = '6px';
-    handle.style.bottom = '6px';
-    handle.style.zIndex = 99999;
-    handle.style.width = '12px';
-    handle.style.height = '12px';
-    handle.style.background = '#fff';
-    handle.style.border = '2px solid #3498db';
-    handle.style.cursor = 'se-resize';
-    handle.addEventListener('mousedown', (e)=>{
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const startW = el.offsetWidth;
-      const startH = el.offsetHeight;
-      function onMove(ev) {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
-        el.style.width = Math.max(10, startW + dx) + 'px';
-        el.style.height = Math.max(10, startH + dy) + 'px';
-      }
-      function onUp(){ document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); parent.postMessage({type:'dom-changed'}, '*'); }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-    el.style.position = el.style.position || 'relative';
-    el.appendChild(handle);
-  }
-
-  // Add handles for images and block elements
-  function addHandlesToAll() {
-    document.querySelectorAll('.editable-block').forEach(el=>{
-      addResizeHandle(el);
-    });
-  }
-
-  // Add interact.js resizable if available
-  if (typeof interact !== 'undefined') {
-    window.addEventListener('load', () => {
-      // make images/resizable
-      document.querySelectorAll('img').forEach(img => {
-        interact(img).resizable({
-          edges: { left: false, right: true, bottom: true, top: false },
-          listeners: {
-            move (ev) {
-              const target = ev.target;
-              let x = (parseFloat(target.getAttribute('data-x')) || 0);
-              let y = (parseFloat(target.getAttribute('data-y')) || 0);
-              // update the element's style
-              target.style.width  = ev.rect.width + 'px';
-              target.style.height = ev.rect.height + 'px';
-              // translate when needed
-              x += ev.deltaRect.left;
-              y += ev.deltaRect.top;
-              target.style.transform = 'translate(' + x + 'px,' + y + 'px)';
-              target.setAttribute('data-x', x);
-              target.setAttribute('data-y', y);
-            },
-            end () { parent.postMessage({type:'dom-changed'}, '*'); }
-          },
-          modifiers: [ interact.modifiers.restrictSize({ min: { width: 50, height: 20 } }) ]
-        });
-      });
-    });
-  }
-
-  // Run at intervals to ensure handles exist
-  setInterval(()=>{
-    markElements();
-    addHandlesToAll();
-  }, 800);
-
-})();
-</script>
-`;
-    // place clientScript before </body> or append at end
-    if (/<\/body>/i.test(htmlText)) {
-      return htmlText.replace(/<\/body>/i, clientScript + '</body>');
-    } else {
-      return htmlText + clientScript;
+    input, button, select {
+      width: 100%;
+      margin: 0.4rem 0;
+      padding: 0.4rem;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.9rem;
+      box-sizing: border-box;
     }
-  }
 
-  // After writing to iframe, set up parent message listener & selection handling
-  function initIframeInteractions() {
-    // Listen for messages from iframe
-    window.addEventListener('message', handleIframeMessage);
-  }
-
-  // Handle messages (element selected or dom-changed)
-  function handleIframeMessage(e) {
-    const data = e.data || {};
-    if (data && data.type === 'element-selected') {
-      selectedElementId = data.id;
-      selectedLabel.textContent = `${data.tag} (${selectedElementId})`;
-      // populate style editor with current styles
-      const el = getIframeElementById(selectedElementId);
-      if (el) {
-        styleBg.value = rgbToHex(window.getComputedStyle(el).backgroundColor) || '#ffffff';
-        styleColor.value = rgbToHex(window.getComputedStyle(el).color) || '#000000';
-        const fs = parseInt(window.getComputedStyle(el).fontSize) || '';
-        styleFontSize.value = fs;
-        stylePadding.value = el.style.padding || '';
-        styleMargin.value = el.style.margin || '';
-      }
-    } else if (data && data.type === 'dom-changed') {
-      // DOM changed: we may want to keep track (for export)
+    input {
+      background: #2a2a2a;
+      color: white;
     }
-  }
 
-  function getIframeElementById(editorId) {
-    const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
-    if (!doc) return null;
-    return doc.querySelector('[data-editor-id="' + editorId + '"]');
-  }
-
-  // Apply style editor values to selected element in iframe
-  applyStylesBtn.addEventListener('click', () => {
-    if (!selectedElementId) { alert('Select an element first'); return; }
-    const el = getIframeElementById(selectedElementId);
-    if (!el) return;
-    if (styleBg.value) el.style.background = styleBg.value;
-    if (styleColor.value) el.style.color = styleColor.value;
-    if (styleFontSize.value) el.style.fontSize = (styleFontSize.value ? styleFontSize.value + 'px' : '');
-    if (stylePadding.value !== undefined) el.style.padding = stylePadding.value || '';
-    if (styleMargin.value !== undefined) el.style.margin = styleMargin.value || '';
-    // notify iframe changed
-    // parent doesn't need to send; iframe posting dom-changed already occurs on reflows in client script sometimes
-  });
-
-  clearStylesBtn.addEventListener('click', () => {
-    if (!selectedElementId) return;
-    const el = getIframeElementById(selectedElementId);
-    if (!el) return;
-    el.style.background = '';
-    el.style.color = '';
-    el.style.fontSize = '';
-    el.style.padding = '';
-    el.style.margin = '';
-    selectedLabel.textContent = '?';
-    selectedElementId = null;
-  });
-
-  // --- Add Section & Create Page UI
-  createPageBtn.addEventListener('click', () => {
-    const name = prompt('Enter new page name (e.g. newpage.html)');
-    if (!name) return;
-    const template = '<!doctype html><html><head><meta charset="utf-8"><title>' + name + '</title></head><body><h1>New Page</h1></body></html>';
-    addFile(name, template, true);
-    prepareHtmlList();
-  });
-
-  addSectionBtn.addEventListener('click', () => {
-    if (!currentFile) return alert('Open a page first');
-    const type = prompt('Section type (header, paragraph, image, footer, div):', 'paragraph');
-    if (!type) return;
-    const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
-    let el;
-    switch(type.toLowerCase()) {
-      case 'header': el = doc.createElement('header'); el.innerHTML = '<h1>Header</h1>'; break;
-      case 'footer': el = doc.createElement('footer'); el.innerHTML = '<p>Footer</p>'; break;
-      case 'image': el = doc.createElement('img'); el.src = ''; el.alt = 'Image'; el.style.maxWidth = '100%'; break;
-      case 'div': el = doc.createElement('div'); el.innerHTML = '<p>New block</p>'; break;
-      default: el = doc.createElement('p'); el.innerText = 'New paragraph'; break;
+    button {
+      background: #0078d4;
+      color: white;
+      cursor: pointer;
+      transition: background 0.2s;
     }
-    el.classList.add('editable-block');
-    el.setAttribute('data-editor-id', 'ed-new-' + Date.now());
-    doc.body.appendChild(el);
-    // re-mark & add handles inside iframe
-    const script = `(${String(function(){ document.querySelectorAll('[data-editor-id]').forEach(x=>x.classList.add('editable-block')); })})();`;
-    previewFrame.contentWindow.eval(script);
-  });
 
-  // --- Export Project (ZIP) ---
-  exportZipBtn.addEventListener('click', async () => {
-    const zip = new JSZip();
-    // Add all files to zip. If a file is the currently open HTML, take the live DOM (so edits are included).
-    for (const key of Object.keys(files)) {
-      if (key === currentFile) {
-        // use live outerHTML
-        const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
-        zip.file(key, '<!doctype html>\n' + doc.documentElement.outerHTML);
-      } else {
-        const entry = files[key];
-        if (!entry) continue;
-        if (entry.isText) {
-          zip.file(key, entry.content);
-        } else {
-          // read blob/file and add as binary
-          const data = await blobToArrayBuffer(entry.content);
-          zip.file(key, data);
-        }
-      }
+    button:hover {
+      background: #0094ff;
     }
-    const content = await zip.generateAsync({ type: 'blob' });
-    saveAs(content, 'project.zip');
-  });
 
-  function blobToArrayBuffer(blob) {
-    return new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = reject;
-      fr.readAsArrayBuffer(blob);
-    });
-  }
-
-  // --- Viewport change ---
-  viewportSelect.addEventListener('change', () => {
-    const val = viewportSelect.value;
-    previewFrame.style.width = val;
-  });
-
-  // --- Utility: RGB -> HEX
-  function rgbToHex(rgb) {
-    if (!rgb) return '';
-    // rgb or rgba format
-    const m = rgb.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
-    if (!m) return '';
-    return '#' + [1,2,3].map(i => parseInt(m[i]).toString(16).padStart(2,'0')).join('');
-  }
-
-  // --- Helper to call loadPage from external UI (used by explorer integration)
-  window.webDesigner = {
-    loadPageByContent: async (name, content, basePath='') => {
-      // Add a temporary file in files map using name
-      addFile(name, content, true);
-      // If basePath provided, attempt to map any referenced assets (not required)
-      prepareHtmlList();
-      // load it
-      await loadPage(name);
+    hr {
+      border: none;
+      border-top: 1px solid #333;
+      margin: 0.8rem 0;
     }
-  };
 
-  // Expose files map for debugging
-  window._webdesigner_files = files;
+    #ghStatus {
+      font-size: 0.85rem;
+      color: #ccc;
+    }
 
-})();
+    ul#pageList {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    ul#pageList li {
+      background: #2c2c2c;
+      margin: 3px 0;
+      padding: 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    ul#pageList li:hover {
+      background: #383838;
+    }
+
+    /* --- Preview --- */
+    #preview-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #000;
+    }
+
+    #toolbar {
+      background: #222;
+      color: #eee;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #333;
+    }
+
+    #viewport {
+      background: #2a2a2a;
+      color: white;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 4px;
+    }
+
+    iframe#preview {
+      flex: 1;
+      border: none;
+      background: white;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Web Designer</h2>
+
+    <!-- Load from GitHub -->
+    <input id="ghOwner" placeholder="GitHub owner (e.g., CanC-Code)">
+    <input id="ghRepo" placeholder="Repo (e.g., Cards_and_Collectibles)">
+    <input id="ghPath" placeholder="Path (optional)">
+    <input id="ghBranch" placeholder="Branch (default: main)">
+    <button id="loadGithub">Load GitHub Repo</button>
+    <div id="ghStatus"></div>
+
+    <hr>
+
+    <!-- Load from URL -->
+    <input id="urlInput" placeholder="https://example.com/page.html">
+    <button id="loadUrl">Load URL</button>
+
+    <hr>
+
+    <!-- Local folder -->
+    <input type="file" id="localFolder" webkitdirectory multiple>
+
+    <hr>
+
+    <h3>Pages</h3>
+    <ul id="pageList"></ul>
+
+    <hr>
+
+    <button id="createPage">Create Page</button>
+    <button id="addSection">Add Section</button>
+    <button id="exportZip">Export Project (ZIP)</button>
+  </div>
+
+  <div id="preview-container">
+    <div id="toolbar">
+      <div>Live Preview</div>
+      <select id="viewport">
+        <option value="100%">Desktop</option>
+        <option value="768px">Tablet</option>
+        <option value="375px">Mobile</option>
+      </select>
+    </div>
+    <iframe id="preview"></iframe>
+  </div>
+
+  <!-- Dependencies -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+  <!-- Main Editor Logic -->
+  <script src="./editor.js"></script>
+</body>
+</html>
