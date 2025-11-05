@@ -1,184 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Web Designer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    /* --- Layout --- */
-    body {
-      display: flex;
-      flex-direction: row;
-      height: 100vh;
-      margin: 0;
-      font-family: 'Segoe UI', sans-serif;
-      background: #111;
-      color: #eee;
-    }
-
-    /* --- Sidebar --- */
-    #sidebar {
-      width: 300px;
-      background: #1e1e1e;
-      border-right: 1px solid #333;
-      display: flex;
-      flex-direction: column;
-      padding: 1rem;
-      box-sizing: border-box;
-      overflow-y: auto;
-    }
-
-    #sidebar h2 {
-      margin: 0 0 1rem 0;
-      font-size: 1.4rem;
-      color: #00aaff;
-    }
-
-    input, button, select {
-      width: 100%;
-      margin: 0.4rem 0;
-      padding: 0.4rem;
-      border: none;
-      border-radius: 4px;
-      font-size: 0.9rem;
-      box-sizing: border-box;
-    }
-
-    input {
-      background: #2a2a2a;
-      color: white;
-    }
-
-    button {
-      background: #0078d4;
-      color: white;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-
-    button:hover {
-      background: #0094ff;
-    }
-
-    hr {
-      border: none;
-      border-top: 1px solid #333;
-      margin: 0.8rem 0;
-    }
-
-    #ghStatus {
-      font-size: 0.85rem;
-      color: #ccc;
-    }
-
-    ul#pageList {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      max-height: 200px;
-      overflow-y: auto;
-    }
-
-    ul#pageList li {
-      background: #2c2c2c;
-      margin: 3px 0;
-      padding: 5px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 0.9rem;
-    }
-
-    ul#pageList li:hover {
-      background: #383838;
-    }
-
-    /* --- Preview --- */
-    #preview-container {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      background: #000;
-    }
-
-    #toolbar {
-      background: #222;
-      color: #eee;
-      padding: 6px 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid #333;
-    }
-
-    #viewport {
-      background: #2a2a2a;
-      color: white;
-      border: 1px solid #444;
-      border-radius: 4px;
-      padding: 4px;
-    }
-
-    iframe#preview {
-      flex: 1;
-      border: none;
-      background: white;
-      width: 100%;
-      height: 100%;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Designer</title>
+<link rel="stylesheet" href="style.css">
+<!-- Prism.js for syntax highlighting in GitHub Explorer files -->
+<link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet"/>
 </head>
 <body>
-  <div id="sidebar">
-    <h2>Web Designer</h2>
 
-    <!-- Load from GitHub -->
-    <input id="ghOwner" placeholder="GitHub owner (e.g., CanC-Code)">
-    <input id="ghRepo" placeholder="Repo (e.g., Cards_and_Collectibles)">
-    <input id="ghPath" placeholder="Path (optional)">
-    <input id="ghBranch" placeholder="Branch (default: main)">
-    <button id="loadGithub">Load GitHub Repo</button>
-    <div id="ghStatus"></div>
+<header>
+    <h1>Web Designer</h1>
+</header>
 
-    <hr>
+<main>
+    <section id="loader-section">
+        <h2>Load Local Folder</h2>
+        <input type="file" id="localFolder" webkitdirectory directory multiple>
+        <p id="localStatus"></p>
 
-    <!-- Load from URL -->
-    <input id="urlInput" placeholder="https://example.com/page.html">
-    <button id="loadUrl">Load URL</button>
+        <h2>Load GitHub Repo + Pages</h2>
+        <input type="text" id="ghOwner" placeholder="Owner (e.g., CanC-Code)">
+        <input type="text" id="ghRepo" placeholder="Repo (e.g., Cards_and_Collectibles)">
+        <button id="loadGithubBtn">Load GitHub Page + Repo</button>
+        <p id="ghStatus"></p>
+    </section>
 
-    <hr>
+    <section id="editor-section">
+        <div id="sidebar">
+            <h3>Pages</h3>
+            <ul id="pageList"></ul>
+            <button id="createPage">Create Page</button>
+            <button id="addSection">Add Section</button>
+            <button id="exportZip">Export ZIP</button>
+        </div>
 
-    <!-- Local folder -->
-    <input type="file" id="localFolder" webkitdirectory multiple>
+        <div id="preview-container">
+            <iframe id="preview"></iframe>
 
-    <hr>
+            <div id="style-editor">
+                <h3>Style Editor</h3>
+                <p>Selected Element: <span id="selectedLabel">?</span></p>
+                <label>Background: <input type="color" id="styleBg"></label>
+                <label>Color: <input type="color" id="styleColor"></label>
+                <label>Font Size: <input type="number" id="styleFontSize"></label>
+                <label>Padding: <input type="text" id="stylePadding" placeholder="e.g. 10px"></label>
+                <label>Margin: <input type="text" id="styleMargin" placeholder="e.g. 5px"></label>
+                <button id="applyStyles">Apply</button>
+                <button id="clearStyles">Clear</button>
 
-    <h3>Pages</h3>
-    <ul id="pageList"></ul>
+                <label>Viewport Width:
+                    <select id="viewport">
+                        <option value="100%">Full</option>
+                        <option value="1200px">Desktop</option>
+                        <option value="768px">Tablet</option>
+                        <option value="375px">Mobile</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+    </section>
+</main>
 
-    <hr>
+<!-- JS Libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.11.0/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-c.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-cpp.min.js"></script>
 
-    <button id="createPage">Create Page</button>
-    <button id="addSection">Add Section</button>
-    <button id="exportZip">Export Project (ZIP)</button>
-  </div>
+<!-- Web Designer JS -->
+<script src="editor.js"></script>
+<!-- GitHub Repo Explorer (integrated for loading) -->
+<script src="explorer/script.js"></script>
 
-  <div id="preview-container">
-    <div id="toolbar">
-      <div>Live Preview</div>
-      <select id="viewport">
-        <option value="100%">Desktop</option>
-        <option value="768px">Tablet</option>
-        <option value="375px">Mobile</option>
-      </select>
-    </div>
-    <iframe id="preview"></iframe>
-  </div>
-
-  <!-- Dependencies -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-
-  <!-- Main Editor Logic -->
-  <script src="./editor.js"></script>
 </body>
 </html>
